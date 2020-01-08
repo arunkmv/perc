@@ -100,17 +100,60 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
       val cvtType = in.typ.extract(log2Ceil(nIntTypes), 1)
       intType := cvtType
 
-      val w = minXLen << cvtType
-      val conv = Module(new hardposit.PtoIConverter(maxPS, maxES, w))
-      conv.io.posit := in.in1
-      conv.io.unsigned := in.typ(0)
-      toint := conv.io.integer
+      for (i <- 0 until nIntTypes-1) {
+        val w = minXLen << i
+        when(cvtType === i.U) {
+          val conv = Module(new hardposit.PtoIConverter(maxPS, maxES, w))
+          conv.io.posit := in.in1
+          conv.io.unsignedOut := in.typ(0)
+          toint := conv.io.integer
+        }
+      }
     }
   }
 
   io.out.valid := valid
   io.out.bits.lt := dcmp.io.lt || (dcmp.io.num1.asSInt < 0.S && dcmp.io.num2.asSInt >= 0.S)
   io.out.bits.in := in
+}
+
+class IntToPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeRetimed {
+  val io = new Bundle {
+    val in = Valid(new IntToFPInput).flip
+    val out = Valid(new FPResult)
+  }
+
+  val in = Pipe(io.in)
+  val tag = !in.bits.singleIn // TODO typeTag
+
+  val mux = Wire(new FPResult)
+  mux.exc := Bits(0)
+  mux.data := in.bits.in1
+
+  val intValue = {
+    val res = Wire(init = in.bits.in1.asSInt)
+    for (i <- 0 until nIntTypes-1) {
+      val smallInt = in.bits.in1((minXLen << i) - 1, 0)
+      when (in.bits.typ.extract(log2Ceil(nIntTypes), 1) === i.U) {
+        res := Mux(in.bits.typ(0), smallInt.zext, smallInt.asSInt)
+      }
+    }
+    res.asUInt
+  }
+
+  when (in.bits.wflags) {// fcvt
+    val i2pResults = for(t <- positTypes) yield {
+      val conv = Module(new hardposit.ItoPConverter(t.totalBits, t.es, xLen))
+      conv.io.integer := intValue
+      conv.io.unsignedIn := in.bits.typ(0)
+      conv.io.posit
+    }
+
+    val resultPadded = i2pResults.init.map(r => Cat(i2pResults.last >> r.getWidth, r)) :+ i2pResults.last
+    mux.data := resultPadded(tag)
+  }
+
+  io.out <> Pipe(in.valid, mux, latency-1)
 }
 
 @chiselName
