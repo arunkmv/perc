@@ -7,6 +7,15 @@ import chisel3.withClock
 import freechips.rocketchip.rocket.RocketCoreParams
 import freechips.rocketchip.util.{ClockGate, ShouldBeRetimed, _}
 
+import scala.collection.mutable.ArrayBuffer
+
+case class FPUParams(
+                      pLen: Int = 64,
+                      divSqrt: Boolean = true,
+                      sfmaLatency: Int = 3,
+                      dfmaLatency: Int = 4
+                    )
+
 case class PType(es: Int, ps: Int) {
   val totalBits = ps
   val NaR = math.pow(2, totalBits - 1).toInt
@@ -49,6 +58,13 @@ trait HasPositFPUParameters {
 
   def typeTag(t: PType) = positTypes.indexOf(t)
 
+  def sanitize(x: UInt, tag: UInt): UInt = {
+    val sanitizedValues = ArrayBuffer[UInt]()
+    for (inType <- positTypes) {
+      sanitizedValues :+ x(inType.totalBits - 1, 0)
+    }
+    sanitizedValues(tag)
+  }
 }
 
 abstract class PositFPUModule(implicit p: Parameters) extends CoreModule()(p) with HasPositFPUParameters
@@ -100,7 +116,7 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
       val cvtType = in.typ.extract(log2Ceil(nIntTypes), 1)
       intType := cvtType
 
-      for (i <- 0 until nIntTypes-1) {
+      for (i <- 0 until nIntTypes - 1) {
         val w = minXLen << i
         when(cvtType === i.U) {
           val conv = Module(new hardposit.PtoIConverter(maxPS, maxES, w))
@@ -132,17 +148,17 @@ class IntToPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()
 
   val intValue = {
     val res = Wire(init = in.bits.in1.asSInt)
-    for (i <- 0 until nIntTypes-1) {
+    for (i <- 0 until nIntTypes - 1) {
       val smallInt = in.bits.in1((minXLen << i) - 1, 0)
-      when (in.bits.typ.extract(log2Ceil(nIntTypes), 1) === i.U) {
+      when(in.bits.typ.extract(log2Ceil(nIntTypes), 1) === i.U) {
         res := Mux(in.bits.typ(0), smallInt.zext, smallInt.asSInt)
       }
     }
     res.asUInt
   }
 
-  when (in.bits.wflags) {// fcvt
-    val i2pResults = for(t <- positTypes) yield {
+  when(in.bits.wflags) { // fcvt
+    val i2pResults = for (t <- positTypes) yield {
       val conv = Module(new hardposit.ItoPConverter(t.totalBits, t.es, xLen))
       conv.io.integer := intValue
       conv.io.unsignedIn := in.bits.typ(0)
@@ -153,7 +169,55 @@ class IntToPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()
     mux.data := resultPadded(tag)
   }
 
-  io.out <> Pipe(in.valid, mux, latency-1)
+  io.out <> Pipe(in.valid, mux, latency - 1)
+}
+
+class PAtoPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeRetimed {
+  val io = new Bundle {
+    val in = Valid(new FPInput).flip
+    val out = Valid(new FPResult)
+    val lt = Bool(INPUT) // from PAToInt
+  }
+
+  val fsgnj = Wire(UInt(fLen.W))
+
+  val in = Pipe(io.in)
+  for (inType <- positTypes) {
+    when(inTag === typeTag(inType).B) {
+      val signNum = Mux(in.bits.rm(1), in.bits.in1 ^ in.bits.in2, Mux(in.bits.rm(0), ~in.bits.in2, in.bits.in2))
+      fsgnj := Mux(signNum(inType.totalBits - 1) ^ in.bits.in1(inType.totalBits - 1), ~in.bits.in1(inType.totalBits - 1, 0) + 1.U, in.bits.in1(inType.totalBits - 1, 0))
+    }
+  }
+
+  val fsgnjMux = Wire(new FPResult)
+  fsgnjMux.exc := UInt(0)
+  fsgnjMux.data := fsgnj
+
+  when(in.bits.wflags) { // fmin/fmax
+    fsgnjMux.data := Mux(in.bits.rm(0) =/= io.lt, in.bits.in1, in.bits.in2)
+  }
+
+  val inTag = !in.bits.singleIn
+  val outTag = !in.bits.singleOut
+  val mux = Wire(init = fsgnjMux)
+  mux := fsgnjMux
+
+  when(in.bits.wflags && !in.bits.ren2) { // fcvt
+    if (positTypes.size > 1) {
+      for (outType <- positTypes) {
+        for (inType <- positTypes) {
+          if (typeTag(outType) != typeTag(inType)) {
+            when(outTag === typeTag(outType).U && inTag === typeTag(inType).U) {
+              val conv = Module(new hardposit.PtoPConverter(inType.totalBits, inType.es, outType.totalBits, outType.es))
+              conv.io.in := in.bits.in1
+              mux.data := conv.io.out
+            }
+          }
+        }
+      }
+    }
+  }
+  io.out <> Pipe(in.valid, mux, latency - 1)
 }
 
 @chiselName
@@ -217,9 +281,8 @@ class PositFPU(cfg: FPUParams)(implicit p: Parameters) extends PositFPUModule()(
     // regfile
     val regfile = Mem(32, Bits(width = fLen + 1))
     when(load_wb) {
-      val wdata = recode(load_wb_data, load_wb_double)
+      val wdata = sanitize(load_wb_data, load_wb_double)
       regfile(load_wb_tag) := wdata
-      assert(consistent(wdata))
       if (enableCommitLog)
         printf("f%d p%d 0x%x\n", load_wb_tag, load_wb_tag + 32.U, load_wb_data)
     }
@@ -252,7 +315,25 @@ class PositFPU(cfg: FPUParams)(implicit p: Parameters) extends PositFPUModule()(
     }
     val ex_rm = 0.U //Posit supports only 1 rounding mode(RNE) TODO Tie fcsr_rm to ground
 
-
+    def fuInput(minT: Option[FType]): FPInput = {
+      val req = Wire(new FPInput)
+      val tag = !ex_ctrl.singleIn // TODO typeTag
+      req := ex_ctrl
+      req.rm := ex_rm
+      req.in1 := sanitize(ex_rs(0), tag)
+      req.in2 := sanitize(ex_rs(1), tag)
+      req.in3 := sanitize(ex_rs(2), tag)
+      req.typ := ex_reg_inst(21, 20)
+      req.fmaCmd := ex_reg_inst(3, 2) | (!ex_ctrl.ren3 && ex_reg_inst(27))
+      when(ex_cp_valid) {
+        req := io.cp_req.bits
+        when(io.cp_req.bits.swap23) {
+          req.in2 := io.cp_req.bits.in3
+          req.in3 := io.cp_req.bits.in2
+        }
+      }
+      req
+    }
   }
 
   val fpuImpl = withClock(gated_clock) {
