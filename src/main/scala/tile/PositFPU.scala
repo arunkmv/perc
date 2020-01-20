@@ -9,12 +9,11 @@ import freechips.rocketchip.util.{ClockGate, ShouldBeRetimed, _}
 
 import scala.collection.mutable.ArrayBuffer
 
-case class FPUParams(
-                      pLen: Int = 64,
-                      divSqrt: Boolean = true,
-                      sfmaLatency: Int = 3,
-                      dfmaLatency: Int = 4
-                    )
+case class PFPUParams(
+                       pLen: Int = 64,
+                       divSqrt: Boolean = true,
+                       fmaLatency: Int = 2
+                     )
 
 case class PType(es: Int, ps: Int) {
   val totalBits = ps
@@ -220,8 +219,46 @@ class PAtoPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(
   io.out <> Pipe(in.valid, mux, latency - 1)
 }
 
+class PFPUFMAPipe(val latency: Int, val t: PType)
+                 (implicit p: Parameters) extends FPUModule()(p) with ShouldBeRetimed {
+  require(latency > 0)
+
+  val io = new Bundle {
+    val in = Valid(new FPInput).flip
+    val out = Valid(new FPResult)
+  }
+
+  val in = Reg(new FPInput)
+  when(io.in.valid) {
+    val one = UInt(1) << (t.totalBits - 2)
+    val zero = 0.U
+    val cmd_fma = io.in.bits.ren3
+    val cmd_addsub = io.in.bits.swap23
+    in := io.in.bits
+    when(cmd_addsub) {
+      in.in2 := one
+    }
+    when(!(cmd_fma || cmd_addsub)) {
+      in.in3 := zero
+    }
+  }
+
+  val fma = Module(new hardposit.PositFMA(t.totalBits, t.es))
+  fma.io.num1 := in.in1
+  fma.io.num2 := in.in2
+  fma.io.num3 := in.in3
+  fma.io.negate := in.fmaCmd(1)
+  fma.io.sub := in.fmaCmd(0)
+
+  val res = Wire(new FPResult)
+  res.data := fma.io.out
+  res.exc := 0.U
+
+  io.out := Pipe(io.in.valid, res, (latency - 1) max 0)
+}
+
 @chiselName
-class PositFPU(cfg: FPUParams)(implicit p: Parameters) extends PositFPUModule()(p) {
+class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()(p) {
   val io = new FPUIO
 
   //Gated Clock
@@ -315,7 +352,7 @@ class PositFPU(cfg: FPUParams)(implicit p: Parameters) extends PositFPUModule()(
     }
     val ex_rm = 0.U //Posit supports only 1 rounding mode(RNE) TODO Tie fcsr_rm to ground
 
-    def fuInput(minT: Option[FType]): FPInput = {
+    def fuInput: FPInput = {
       val req = Wire(new FPInput)
       val tag = !ex_ctrl.singleIn // TODO typeTag
       req := ex_ctrl
@@ -334,6 +371,12 @@ class PositFPU(cfg: FPUParams)(implicit p: Parameters) extends PositFPUModule()(
       }
       req
     }
+
+    val sfma = Module(new PFPUFMAPipe(cfg.fmaLatency, PType.S))
+    sfma.io.in.valid := req_valid && ex_ctrl.fma && ex_ctrl.singleOut
+    sfma.io.in.bits := fuInput
+
+
   }
 
   val fpuImpl = withClock(gated_clock) {
