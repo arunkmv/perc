@@ -1,10 +1,13 @@
 package freechips.rocketchip.tile
 
+import Chisel.ImplicitConversions._
 import Chisel._
 import chipsalliance.rocketchip.config.Parameters
 import chisel3.experimental.chiselName
+import chisel3.internal.sourceinfo.SourceInfo
 import chisel3.withClock
 import freechips.rocketchip.rocket.RocketCoreParams
+import freechips.rocketchip.util.property.cover
 import freechips.rocketchip.util.{ClockGate, ShouldBeRetimed, _}
 
 import scala.collection.mutable.ArrayBuffer
@@ -376,11 +379,182 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
     sfma.io.in.valid := req_valid && ex_ctrl.fma && ex_ctrl.singleOut
     sfma.io.in.bits := fuInput
 
+    val paiu = Module(new PAToInt)
+    paiu.io.in.valid := req_valid && (ex_ctrl.toint || ex_ctrl.div || ex_ctrl.sqrt || (ex_ctrl.fastpipe && ex_ctrl.wflags))
+    paiu.io.in.bits := fuInput
+    io.store_data := paiu.io.out.bits.store
+    io.toint_data := paiu.io.out.bits.toint
+    when(paiu.io.out.valid && mem_cp_valid && mem_ctrl.toint) {
+      io.cp_resp.bits.data := paiu.io.out.bits.toint
+      io.cp_resp.valid := Bool(true)
+    }
 
-  }
+    val ipau = Module(new IntToPA(latency = 2))
+    ipau.io.in.valid := req_valid && ex_ctrl.fromint
+    ipau.io.in.bits := paiu.io.in.bits
+    ipau.io.in.bits.in1 := Mux(ex_cp_valid, io.cp_req.bits.in1, io.fromint_data)
+
+    val pamu = Module(new PAtoPA(2))
+    pamu.io.in.valid := req_valid && ex_ctrl.fastpipe
+    pamu.io.in.bits := paiu.io.in.bits
+    pamu.io.lt := paiu.io.out.bits.lt
+
+    val divSqrt_wen = Wire(init = false.B)
+    val divSqrt_inFlight = Wire(init = false.B)
+    val divSqrt_waddr = Reg(UInt(width = 5))
+    val divSqrt_typeTag = Wire(UInt(width = log2Up(positTypes.size)))
+    val divSqrt_wdata = Wire(UInt(width = fLen)) // TODO add PLen
+    val divSqrt_flags = Wire(UInt(width = FPConstants.FLAGS_SZ))
+
+    // writeback arbitration
+    case class Pipe(p: Module, lat: Int, cond: (FPUCtrlSigs) => Bool, res: FPResult)
+
+    val pipes = List(
+      Pipe(pamu, pamu.latency, (c: FPUCtrlSigs) => c.fastpipe, pamu.io.out.bits),
+      Pipe(ipau, ipau.latency, (c: FPUCtrlSigs) => c.fromint, ipau.io.out.bits),
+      Pipe(sfma, sfma.latency, (c: FPUCtrlSigs) => c.fma && c.singleOut, sfma.io.out.bits)) ++
+      (fLen > 32).option({
+        val dfma = Module(new FPUFMAPipe(cfg.fmaLatency, FType.D))
+        dfma.io.in.valid := req_valid && ex_ctrl.fma && !ex_ctrl.singleOut
+        dfma.io.in.bits := fuInput
+        Pipe(dfma, dfma.latency, (c: FPUCtrlSigs) => c.fma && !c.singleOut, dfma.io.out.bits)
+      })
+
+    def latencyMask(c: FPUCtrlSigs, offset: Int) = {
+      require(pipes.forall(_.lat >= offset))
+      pipes.map(p => Mux(p.cond(c), UInt(1 << p.lat - offset), UInt(0))).reduce(_ | _)
+    }
+
+    def pipeid(c: FPUCtrlSigs) = pipes.zipWithIndex.map(p => Mux(p._1.cond(c), UInt(p._2), UInt(0))).reduce(_ | _)
+
+    val maxLatency = pipes.map(_.lat).max
+    val memLatencyMask = latencyMask(mem_ctrl, 2)
+
+    class WBInfo extends Bundle {
+      val rd = UInt(width = 5)
+      val single = Bool()
+      val cp = Bool()
+      val pipeid = UInt(width = log2Ceil(pipes.size))
+
+      override def cloneType: this.type = new WBInfo().asInstanceOf[this.type]
+    }
+
+    val wen = Reg(init = Bits(0, maxLatency - 1))
+    val wbInfo = Reg(Vec(maxLatency - 1, new WBInfo))
+    val mem_wen = mem_reg_valid && (mem_ctrl.fma || mem_ctrl.fastpipe || mem_ctrl.fromint)
+    val write_port_busy = RegEnable(mem_wen && (memLatencyMask & latencyMask(ex_ctrl, 1)).orR || (wen & latencyMask(ex_ctrl, 0)).orR, req_valid)
+    ccover(mem_reg_valid && write_port_busy, "WB_STRUCTURAL", "structural hazard on writeback")
+
+    for (i <- 0 until maxLatency - 2) {
+      when(wen(i + 1)) {
+        wbInfo(i) := wbInfo(i + 1)
+      }
+    }
+    wen := wen >> 1
+    when(mem_wen) {
+      when(!killm) {
+        wen := wen >> 1 | memLatencyMask
+      }
+      for (i <- 0 until maxLatency - 1) {
+        when(!write_port_busy && memLatencyMask(i)) {
+          wbInfo(i).cp := mem_cp_valid
+          wbInfo(i).single := mem_ctrl.singleOut
+          wbInfo(i).pipeid := pipeid(mem_ctrl)
+          wbInfo(i).rd := mem_reg_inst(11, 7)
+        }
+      }
+    }
+
+    val waddr = Mux(divSqrt_wen, divSqrt_waddr, wbInfo(0).rd)
+    val wdouble = Mux(divSqrt_wen, divSqrt_typeTag, !wbInfo(0).single)
+    val wdata = Mux(divSqrt_wen, divSqrt_wdata, (pipes.map(_.res.data): Seq[UInt]) (wbInfo(0).pipeid))
+    val wexc = (pipes.map(_.res.exc): Seq[UInt]) (wbInfo(0).pipeid)
+    when((!wbInfo(0).cp && wen(0)) || divSqrt_wen) {
+      regfile(waddr) := wdata
+      if (enableCommitLog) {
+        printf("f%d p%d 0x%x\n", waddr, waddr + 32.U, wdata)
+      }
+    }
+    when(wbInfo(0).cp && wen(0)) {
+      io.cp_resp.bits.data := wdata
+      io.cp_resp.valid := Bool(true)
+    }
+    io.cp_req.ready := !ex_reg_valid
+
+    val wb_toint_valid = wb_reg_valid && wb_ctrl.toint
+    val wb_toint_exc = RegEnable(paiu.io.out.bits.exc, mem_ctrl.toint)
+    io.fcsr_flags.valid := wb_toint_valid || divSqrt_wen || wen(0)
+    io.fcsr_flags.bits :=
+      Mux(wb_toint_valid, wb_toint_exc, UInt(0)) |
+        Mux(divSqrt_wen, divSqrt_flags, UInt(0)) |
+        Mux(wen(0), wexc, UInt(0))
+
+    val divSqrt_write_port_busy = (mem_ctrl.div || mem_ctrl.sqrt) && wen.orR
+    io.fcsr_rdy := !(ex_reg_valid && ex_ctrl.wflags || mem_reg_valid && mem_ctrl.wflags || wb_reg_valid && wb_ctrl.toint || wen.orR || divSqrt_inFlight)
+    io.nack_mem := write_port_busy || divSqrt_write_port_busy || divSqrt_inFlight
+    io.dec <> fp_decoder.io.sigs
+
+    def useScoreboard(f: ((Pipe, Int)) => Bool) = pipes.zipWithIndex.filter(_._1.lat > 3).map(x => f(x)).fold(Bool(false))(_ || _)
+
+    io.sboard_set := wb_reg_valid && !wb_cp_valid && Reg(next = useScoreboard(_._1.cond(mem_ctrl)) || mem_ctrl.div || mem_ctrl.sqrt)
+    io.sboard_clr := !wb_cp_valid && (divSqrt_wen || (wen(0) && useScoreboard(x => wbInfo(0).pipeid === UInt(x._2))))
+    io.sboard_clra := waddr
+    ccover(io.sboard_clr && load_wb, "DUAL_WRITEBACK", "load and FMA writeback on same cycle")
+    // we don't currently support round-max-magnitude (rm=4)
+    io.illegal_rm := io.inst(14, 12).isOneOf(5, 6) || io.inst(14, 12) === 7 && io.fcsr_rm >= 5
+
+    if (cfg.divSqrt) {
+      val divSqrt_killed = Reg(Bool())
+      ccover(divSqrt_inFlight && divSqrt_killed, "DIV_KILLED", "divide killed after issued to divider")
+      ccover(divSqrt_inFlight && mem_reg_valid && (mem_ctrl.div || mem_ctrl.sqrt), "DIV_BUSY", "divider structural hazard")
+      ccover(mem_reg_valid && divSqrt_write_port_busy, "DIV_WB_STRUCTURAL", "structural hazard on division writeback")
+
+      for (t <- positTypes) {
+        val tag = !mem_ctrl.singleOut // TODO typeTag
+        val divSqrt = Module(new hardposit.PositDivSqrt(t.totalBits, t.es))
+        divSqrt.io.validIn := mem_reg_valid && tag === typeTag(t) && (mem_ctrl.div || mem_ctrl.sqrt) && !divSqrt_inFlight
+        divSqrt.io.sqrtOp := mem_ctrl.sqrt
+        divSqrt.io.num1 := paiu.io.out.bits.in.in1
+        divSqrt.io.num2 := paiu.io.out.bits.in.in2
+
+        when(!divSqrt.io.readyIn) {
+          divSqrt_inFlight := true
+        } // only 1 in flight
+
+        when(divSqrt.io.validIn && divSqrt.io.readyIn) {
+          divSqrt_killed := killm
+          divSqrt_waddr := mem_reg_inst(11, 7)
+        }
+
+        when(divSqrt.io.validOut_div || divSqrt.io.validOut_sqrt) {
+          divSqrt_wen := !divSqrt_killed
+          divSqrt_wdata := divSqrt.io.out
+          divSqrt_flags := divSqrt.io.exceptions
+          divSqrt_typeTag := typeTag(t)
+        }
+      }
+    } else {
+      when(id_ctrl.div || id_ctrl.sqrt) {
+        io.illegal_rm := true
+      }
+    }
+
+    // gate the clock
+    clock_en_reg := !useClockGating ||
+      io.keep_clock_enabled || // chicken bit
+      io.valid || // ID stage
+      req_valid || // EX stage
+      mem_reg_valid || mem_cp_valid || // MEM stage
+      wb_reg_valid || wb_cp_valid || // WB stage
+      wen.orR || divSqrt_inFlight || // post-WB stage
+      io.dmem_resp_val // load writeback
+  } // leaving gated-clock domain
 
   val fpuImpl = withClock(gated_clock) {
     new PositFPUImpl
   }
+
+  def ccover(cond: Bool, label: String, desc: String)(implicit sourceInfo: SourceInfo) =
+    cover(cond, s"FPU_$label", "Core;;" + desc)
 }
 
