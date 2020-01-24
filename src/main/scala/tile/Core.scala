@@ -3,7 +3,6 @@
 package freechips.rocketchip.tile
 
 import Chisel._
-
 import freechips.rocketchip.config._
 import freechips.rocketchip.rocket._
 import freechips.rocketchip.util._
@@ -24,6 +23,7 @@ trait CoreParams {
   val useRVE: Boolean
   val mulDiv: Option[MulDivParams]
   val fpu: Option[FPUParams]
+  val pfpu: Option[PFPUParams]
   val fetchWidth: Int
   val decodeWidth: Int
   val retireWidth: Int
@@ -52,12 +52,14 @@ trait CoreParams {
   def vLen: Int = 0
   def eLen(xLen: Int, fLen: Int): Int = xLen max fLen
   def vMemDataBits: Int = 0
+
+  require(!(pfpu.isEmpty && fpu.isEmpty))
 }
 
 trait HasCoreParameters extends HasTileParameters {
   val coreParams: CoreParams = tileParams.core
 
-  val fLen = coreParams.fpu.map(_.fLen).getOrElse(0)
+  val fLen = coreParams.fpu.map(_.fLen).getOrElse(0) | coreParams.pfpu.map(_.pLen).getOrElse(0)
 
   val usingMulDiv = coreParams.mulDiv.nonEmpty
   val usingFPU = coreParams.fpu.nonEmpty

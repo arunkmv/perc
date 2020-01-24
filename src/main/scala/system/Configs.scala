@@ -49,6 +49,8 @@ class DualChannelBenchmarkConfig extends Config(new WithNMemoryChannels(2) ++ ne
 class QuadChannelBenchmarkConfig extends Config(new WithNMemoryChannels(4) ++ new SingleChannelBenchmarkConfig)
 class OctoChannelBenchmarkConfig extends Config(new WithNMemoryChannels(8) ++ new SingleChannelBenchmarkConfig)
 
+class PositEnabledConfig extends Config(new WithNPositEnabledCores(1) ++ new BaseConfig)
+
 class TinyConfig extends Config(
   new WithNoMemPort ++
   new WithNMemoryChannels(0) ++
