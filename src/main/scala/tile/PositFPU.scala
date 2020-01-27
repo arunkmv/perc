@@ -61,10 +61,7 @@ trait HasPositFPUParameters {
   def typeTag(t: PType) = positTypes.indexOf(t)
 
   def sanitize(x: UInt, tag: UInt): UInt = {
-    val sanitizedValues = ArrayBuffer[UInt]()
-    for (inType <- positTypes) {
-      sanitizedValues :+ x(inType.totalBits - 1, 0)
-    }
+    val sanitizedValues = positTypes.map(t => x(t.totalBits - 1, 0))
     sanitizedValues(tag)
   }
 }
@@ -92,8 +89,8 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
   val valid = Reg(next = io.in.valid)
 
   val dcmp = Module(new hardposit.PositCompare(maxPS, maxES))
-  dcmp.io.num1 := in.in1
-  dcmp.io.num2 := in.in2
+  dcmp.io.num1 := in.in1.asSInt()
+  dcmp.io.num2 := in.in2.asSInt()
 
   val tag = !in.singleOut // TODO typeTag
   val store = in.in1
@@ -185,7 +182,7 @@ class PAtoPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(
 
   val in = Pipe(io.in)
   for (inType <- positTypes) {
-    when(inTag === typeTag(inType).B) {
+    when(!in.bits.singleIn === typeTag(inType).B) {
       val signNum = Mux(in.bits.rm(1), in.bits.in1 ^ in.bits.in2, Mux(in.bits.rm(0), ~in.bits.in2, in.bits.in2))
       fsgnj := Mux(signNum(inType.totalBits - 1) ^ in.bits.in1(inType.totalBits - 1), ~in.bits.in1(inType.totalBits - 1, 0) + 1.U, in.bits.in1(inType.totalBits - 1, 0))
     }
@@ -550,7 +547,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
       io.dmem_resp_val // load writeback
   } // leaving gated-clock domain
 
-  val fpuImpl = withClock(gated_clock) {
+  val pfpuImpl = withClock(gated_clock) {
     new PositFPUImpl
   }
 
