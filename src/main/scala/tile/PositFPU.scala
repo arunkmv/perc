@@ -411,7 +411,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
       Pipe(ipau, ipau.latency, (c: FPUCtrlSigs) => c.fromint, ipau.io.out.bits),
       Pipe(sfma, sfma.latency, (c: FPUCtrlSigs) => c.fma && c.singleOut, sfma.io.out.bits)) ++
       (fLen > 32).option({
-        val dfma = Module(new FPUFMAPipe(cfg.fmaLatency, FType.D))
+        val dfma = Module(new PFPUFMAPipe(cfg.fmaLatency, PType.D))
         dfma.io.in.valid := req_valid && ex_ctrl.fma && !ex_ctrl.singleOut
         dfma.io.in.bits := fuInput
         Pipe(dfma, dfma.latency, (c: FPUCtrlSigs) => c.fma && !c.singleOut, dfma.io.out.bits)
