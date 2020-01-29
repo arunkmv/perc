@@ -62,7 +62,7 @@ trait HasCoreParameters extends HasTileParameters {
   val fLen = coreParams.fpu.map(_.fLen).getOrElse(0) | coreParams.pfpu.map(_.pLen).getOrElse(0)
 
   val usingMulDiv = coreParams.mulDiv.nonEmpty
-  val usingFPU = coreParams.fpu.nonEmpty
+  val usingFPU = coreParams.fpu.nonEmpty || coreParams.pfpu.nonEmpty
   val usingAtomics = coreParams.useAtomics
   val usingAtomicsOnlyForIO = coreParams.useAtomicsOnlyForIO
   val usingAtomicsInCache = usingAtomics && !usingAtomicsOnlyForIO
