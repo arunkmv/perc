@@ -76,7 +76,7 @@ trait HasNonDiplomaticTileParameters {
     val m = if (tileParams.core.mulDiv.nonEmpty) "m" else ""
     val a = if (tileParams.core.useAtomics) "a" else ""
     val f = if (tileParams.core.fpu.nonEmpty || tileParams.core.pfpu.nonEmpty) "f" else ""
-    val d = if ((tileParams.core.fpu.nonEmpty || tileParams.core.pfpu.nonEmpty) && (tileParams.core.fpu.get.fLen > 32 || tileParams.core.pfpu.get.pLen > 32)) "d" else ""
+    val d = if ((tileParams.core.fpu.nonEmpty || tileParams.core.pfpu.nonEmpty) && (tileParams.core.fpu.map(_.fLen).getOrElse(0) > 32 || tileParams.core.pfpu.map(_.pLen).getOrElse(0) > 32)) "d" else ""
     val c = if (tileParams.core.useCompressed) "c" else ""
     s"rv${p(XLen)}$ie$m$a$f$d$c"
   }
