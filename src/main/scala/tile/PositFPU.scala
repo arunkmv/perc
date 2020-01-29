@@ -10,8 +10,6 @@ import freechips.rocketchip.rocket.RocketCoreParams
 import freechips.rocketchip.util.property.cover
 import freechips.rocketchip.util.{ClockGate, ShouldBeRetimed, _}
 
-import scala.collection.mutable.ArrayBuffer
-
 case class PFPUParams(
                        pLen: Int = 64,
                        divSqrt: Boolean = true,
@@ -243,6 +241,8 @@ class PFPUFMAPipe(val latency: Int, val t: PType)
     }
   }
 
+  val fmaValid = RegNext(io.in.valid)
+
   val fma = Module(new hardposit.PositFMA(t.totalBits, t.es))
   fma.io.num1 := in.in1
   fma.io.num2 := in.in2
@@ -254,7 +254,7 @@ class PFPUFMAPipe(val latency: Int, val t: PType)
   res.data := fma.io.out
   res.exc := 0.U
 
-  io.out := Pipe(io.in.valid, res, (latency - 1) max 0)
+  io.out := Pipe(fmaValid, res, (latency - 1) max 0)
 }
 
 @chiselName
