@@ -16,6 +16,6 @@
 [submodule "api-config-chipsalliance"]
 	path = api-config-chipsalliance
 	url = https://github.com/chipsalliance/api-config-chipsalliance.git
-[submodule "posit-fpga"]
-	path = posit-fpga
-	url = https://github.com/arunkmv/posit-fpga.git
+[submodule "hardposit"]
+	path = hardposit
+	url = https://github.com/arunkmv/hardposit-chisel3.git
