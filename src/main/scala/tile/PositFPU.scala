@@ -18,14 +18,14 @@ case class PFPUParams(
 
 case class PType(es: Int, ps: Int) {
   val totalBits = ps
-  val NaR = math.pow(2, totalBits - 1).toInt
+  val NaR = math.pow(2, totalBits - 1).toInt.U(totalBits.W)
 
   def classify(x: UInt): UInt = {
     val sign = x(totalBits - 1)
     val isZero = x === 0.U
-    val isNaR = x === NaR.U
+    val isNaR = sign && !x(totalBits - 2, 0).orR()
 
-    Cat(isZero, isNaR, sign)
+    Cat(isZero, isNaR, Mux(isNaR, 0.U, sign))
   }
 }
 
@@ -350,7 +350,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
         ex_ra(2) := io.inst(31, 27)
       }
     }
-    val ex_rm = 0.U //Posit supports only 1 rounding mode(RNE) TODO Tie fcsr_rm to ground
+    val ex_rm = Mux(ex_ctrl.toint, ex_reg_inst(14,12), 0.U) //Posit supports only 1 rounding mode(RNE) TODO Tie fcsr_rm to ground
 
     def fuInput: FPInput = {
       val req = Wire(new FPInput)
