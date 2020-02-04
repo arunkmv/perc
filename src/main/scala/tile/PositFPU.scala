@@ -90,16 +90,17 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
   dcmp.io.num1 := in.in1.asSInt()
   dcmp.io.num2 := in.in2.asSInt()
 
-  val tag = !in.singleOut // TODO typeTag
+  val inTag = !in.singleIn
+  val outTag = !in.singleOut // TODO typeTag
   val store = in.in1
   val toint = Wire(init = store)
-  val intType = Wire(init = tag)
-  io.out.bits.store := (positTypes.map(t => Fill(maxType.totalBits / t.totalBits, store(t.totalBits - 1, 0))): Seq[UInt]) (tag)
+  val intType = Wire(init = outTag)
+  io.out.bits.store := (positTypes.map(t => Fill(maxType.totalBits / t.totalBits, store(t.totalBits - 1, 0))): Seq[UInt]) (outTag)
   io.out.bits.toint := ((0 until nIntTypes).map(i => toint((minXLen << i) - 1, 0).sextTo(xLen)): Seq[UInt]) (intType)
   io.out.bits.exc := Bits(0)
 
   when(in.rm(0)) {
-    val classify_out = (positTypes.map(t => t.classify(in.in1)): Seq[UInt]) (tag)
+    val classify_out = (positTypes.map(t => t.classify(in.in1)): Seq[UInt]) (outTag)
     toint := classify_out | (store >> minXLen << minXLen)
     intType := 0.B
   }
@@ -114,12 +115,14 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
       intType := cvtType
 
       for (i <- 0 until nIntTypes - 1) {
-        val w = minXLen << i
-        when(cvtType === i.U) {
-          val conv = Module(new hardposit.PtoIConverter(maxPS, maxES, w))
-          conv.io.posit := in.in1
-          conv.io.unsignedOut := in.typ(0)
-          toint := conv.io.integer
+        for (p <- positTypes) {
+          val w = minXLen << i
+          when(cvtType === i.U && inTag === typeTag(p).U) {
+            val conv = Module(new hardposit.PtoIConverter(p.ps, p.es, w))
+            conv.io.posit := in.in1
+            conv.io.unsignedOut := in.typ(0)
+            toint := conv.io.integer
+          }
         }
       }
     }
