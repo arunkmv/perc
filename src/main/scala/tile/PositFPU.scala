@@ -111,13 +111,11 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
     intType := 0.B
 
     when(!in.ren2) {
-      val cvtType = in.typ.extract(log2Ceil(nIntTypes), 1)
-      intType := cvtType
 
-      for (i <- 0 until nIntTypes - 1) {
+      for (i <- 0 until nIntTypes) {
         for (p <- positTypes) {
           val w = minXLen << i
-          when(cvtType === i.U && inTag === typeTag(p).U) {
+          when(outTag === i.U && inTag === typeTag(p).U) {
             val conv = Module(new hardposit.PtoIConverter(p.ps, p.es, w))
             conv.io.posit := in.in1
             conv.io.unsignedOut := in.typ(0)
