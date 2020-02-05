@@ -163,8 +163,7 @@ class IntToPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()
       conv.io.posit
     }
 
-    val resultPadded = i2pResults.init.map(r => Cat(i2pResults.last >> r.getWidth, r)) :+ i2pResults.last
-    mux.data := resultPadded(tag)
+    mux.data := i2pResults(tag)
   }
 
   io.out <> Pipe(in.valid, mux, latency - 1)
