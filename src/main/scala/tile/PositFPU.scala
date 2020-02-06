@@ -86,12 +86,23 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
   val in = RegEnable(io.in.bits, io.in.valid)
   val valid = Reg(next = io.in.valid)
 
-  val dcmp = Module(new hardposit.PositCompare(maxPS, maxES))
-  dcmp.io.num1 := in.in1.asSInt()
-  dcmp.io.num2 := in.in2.asSInt()
-
   val inTag = !in.singleIn // TODO typeTag
   val store = in.in1
+
+  val cmpIn1 = Wire(UInt(maxPS.W))
+  val cmpIn2 = Wire(UInt(maxPS.W))
+
+  for(p <- positTypes) {
+    when(inTag === typeTag(p)) {
+      cmpIn1 := in.in1(p.ps - 1, 0).sextTo(maxPS)
+      cmpIn2 := in.in2(p.ps - 1, 0).sextTo(maxPS)
+    }
+  }
+
+  val dcmp = Module(new hardposit.PositCompare(maxPS, maxES))
+  dcmp.io.num1 := cmpIn1.asSInt()
+  dcmp.io.num2 := cmpIn2.asSInt()
+
   val toint = Wire(init = store)
   val intType = Wire(init = inTag)
   io.out.bits.store := (positTypes.map(t => Fill(maxType.totalBits / t.totalBits, store(t.totalBits - 1, 0))): Seq[UInt]) (inTag)
@@ -350,7 +361,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
         ex_ra(2) := io.inst(31, 27)
       }
     }
-    val ex_rm = Mux(ex_ctrl.toint, ex_reg_inst(14,12), 0.U) //Posit supports only 1 rounding mode(RNE) TODO Tie fcsr_rm to ground
+    val ex_rm = Mux(ex_reg_inst(14,12) === Bits(7), io.fcsr_rm, ex_reg_inst(14,12)) //Posit supports only 1 rounding mode(RNE) TODO Tie fcsr_rm to ground
 
     def fuInput: FPInput = {
       val req = Wire(new FPInput)
