@@ -248,7 +248,7 @@ class PFPUFMAPipe(val latency: Int, val t: PType)
   fma.io.num2 := in.in2
   fma.io.num3 := in.in3
   fma.io.negate := in.fmaCmd(1)
-  fma.io.sub := in.fmaCmd(0)
+  fma.io.sub := in.fmaCmd.xorR
 
   val res = Wire(new FPResult)
   res.data := fma.io.out
