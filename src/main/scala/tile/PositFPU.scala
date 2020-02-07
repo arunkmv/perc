@@ -87,6 +87,7 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
   val valid = Reg(next = io.in.valid)
 
   val inTag = !in.singleIn // TODO typeTag
+  val outTag = !in.singleOut
   val store = in.in1
 
   val cmpIn1 = Wire(UInt(maxPS.W))
@@ -104,8 +105,8 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
   dcmp.io.num2 := cmpIn2.asSInt()
 
   val toint = Wire(init = store)
-  val intType = Wire(init = inTag)
-  io.out.bits.store := (positTypes.map(t => Fill(maxType.totalBits / t.totalBits, store(t.totalBits - 1, 0))): Seq[UInt]) (inTag)
+  val intType = Wire(init = outTag)
+  io.out.bits.store := (positTypes.map(t => Fill(maxType.totalBits / t.totalBits, store(t.totalBits - 1, 0))): Seq[UInt]) (outTag)
   io.out.bits.toint := ((0 until nIntTypes).map(i => toint((minXLen << i) - 1, 0).sextTo(xLen)): Seq[UInt]) (intType)
   io.out.bits.exc := Bits(0)
 
