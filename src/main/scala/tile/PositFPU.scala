@@ -16,6 +16,34 @@ case class PFPUParams(
                        fmaLatency: Int = 2
                      )
 
+class PFPUIO(implicit p: Parameters) extends FPUCoreIO ()(p) {
+  val cp_req = Decoupled(new PAInput()).flip //cp doesn't pay attn to kill sigs
+  val cp_resp = Decoupled(new PAResult())
+}
+
+class PAResult(implicit p: Parameters) extends CoreBundle()(p) {
+  val data = Bits(width = fLen)
+  val exc = Bits(width = FPConstants.FLAGS_SZ)
+}
+
+class IntToPAInput(implicit p: Parameters) extends CoreBundle()(p) with HasFPUCtrlSigs {
+  val rm = Bits(width = FPConstants.RM_SZ)
+  val typ = Bits(width = 2)
+  val in1 = Bits(width = xLen)
+}
+
+class PAInput(implicit p: Parameters) extends CoreBundle()(p) with HasFPUCtrlSigs {
+  val rm = Bits(width = FPConstants.RM_SZ)
+  val fmaCmd = Bits(width = 2)
+  val typ = Bits(width = 2)
+  val in1 = Bits(width = fLen)
+  val in2 = Bits(width = fLen)
+  val in3 = Bits(width = fLen)
+
+  override def cloneType = new PAInput().asInstanceOf[this.type]
+}
+
+
 case class PType(es: Int, ps: Int) {
   val totalBits = ps
   val NaR = math.pow(2, totalBits - 1).toInt.U(totalBits.W)
@@ -69,7 +97,7 @@ abstract class PositFPUModule(implicit p: Parameters) extends CoreModule()(p) wi
 class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeRetimed {
 
   class Output extends Bundle {
-    val in = new FPInput
+    val in = new PAInput
     val lt = Bool()
     val store = Bits(width = fLen)
     val toint = Bits(width = xLen)
@@ -79,7 +107,7 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
   }
 
   val io = new Bundle {
-    val in = Valid(new FPInput).flip
+    val in = Valid(new PAInput).flip
     val out = Valid(new Output)
   }
 
@@ -145,14 +173,14 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
 
 class IntToPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeRetimed {
   val io = new Bundle {
-    val in = Valid(new IntToFPInput).flip
-    val out = Valid(new FPResult)
+    val in = Valid(new IntToPAInput).flip
+    val out = Valid(new PAResult)
   }
 
   val in = Pipe(io.in)
   val tag = !in.bits.singleIn // TODO typeTag
 
-  val mux = Wire(new FPResult)
+  val mux = Wire(new PAResult)
   mux.exc := Bits(0)
   mux.data := in.bits.in1
 
@@ -183,8 +211,8 @@ class IntToPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()
 
 class PAtoPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeRetimed {
   val io = new Bundle {
-    val in = Valid(new FPInput).flip
-    val out = Valid(new FPResult)
+    val in = Valid(new PAInput).flip
+    val out = Valid(new PAResult)
     val lt = Bool(INPUT) // from PAToInt
   }
 
@@ -198,7 +226,7 @@ class PAtoPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(
     }
   }
 
-  val fsgnjMux = Wire(new FPResult)
+  val fsgnjMux = Wire(new PAResult)
   fsgnjMux.exc := UInt(0)
   fsgnjMux.data := fsgnj
 
@@ -230,15 +258,15 @@ class PAtoPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(
 }
 
 class PFPUFMAPipe(val latency: Int, val t: PType)
-                 (implicit p: Parameters) extends FPUModule()(p) with ShouldBeRetimed {
+                 (implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeRetimed {
   require(latency > 0)
 
   val io = new Bundle {
-    val in = Valid(new FPInput).flip
-    val out = Valid(new FPResult)
+    val in = Valid(new PAInput).flip
+    val out = Valid(new PAResult)
   }
 
-  val in = Reg(new FPInput)
+  val in = Reg(new PAInput)
   when(io.in.valid) {
     val one = UInt(1) << (t.totalBits - 2)
     val zero = 0.U
@@ -262,7 +290,7 @@ class PFPUFMAPipe(val latency: Int, val t: PType)
   fma.io.negate := in.fmaCmd(1)
   fma.io.sub := in.fmaCmd.xorR
 
-  val res = Wire(new FPResult)
+  val res = Wire(new PAResult)
   res.data := fma.io.out
   res.exc := 0.U
 
@@ -271,7 +299,7 @@ class PFPUFMAPipe(val latency: Int, val t: PType)
 
 @chiselName
 class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()(p) {
-  val io = new FPUIO
+  val io = new PFPUIO
 
   //Gated Clock
   val useClockGating = coreParams match {
@@ -364,8 +392,8 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
     }
     val ex_rm = Mux(ex_reg_inst(14,12) === Bits(7), io.fcsr_rm, ex_reg_inst(14,12)) //Posit supports only 1 rounding mode(RNE) TODO Tie fcsr_rm to ground
 
-    def fuInput: FPInput = {
-      val req = Wire(new FPInput)
+    def pfuInput: PAInput = {
+      val req = Wire(new PAInput)
       val tag = !ex_ctrl.singleIn // TODO typeTag
       req := ex_ctrl
       req.rm := ex_rm
@@ -386,11 +414,11 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
 
     val sfma = Module(new PFPUFMAPipe(cfg.fmaLatency, PType.S))
     sfma.io.in.valid := req_valid && ex_ctrl.fma && ex_ctrl.singleOut
-    sfma.io.in.bits := fuInput
+    sfma.io.in.bits := pfuInput
 
     val paiu = Module(new PAToInt)
     paiu.io.in.valid := req_valid && (ex_ctrl.toint || ex_ctrl.div || ex_ctrl.sqrt || (ex_ctrl.fastpipe && ex_ctrl.wflags))
-    paiu.io.in.bits := fuInput
+    paiu.io.in.bits := pfuInput
     io.store_data := paiu.io.out.bits.store
     io.toint_data := paiu.io.out.bits.toint
     when(paiu.io.out.valid && mem_cp_valid && mem_ctrl.toint) {
@@ -416,7 +444,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
     val divSqrt_flags = Wire(UInt(width = FPConstants.FLAGS_SZ))
 
     // writeback arbitration
-    case class Pipe(p: Module, lat: Int, cond: (FPUCtrlSigs) => Bool, res: FPResult)
+    case class Pipe(p: Module, lat: Int, cond: (FPUCtrlSigs) => Bool, res: PAResult)
 
     val pipes = List(
       Pipe(pamu, pamu.latency, (c: FPUCtrlSigs) => c.fastpipe, pamu.io.out.bits),
@@ -425,7 +453,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
       (fLen > 32).option({
         val dfma = Module(new PFPUFMAPipe(cfg.fmaLatency, PType.D))
         dfma.io.in.valid := req_valid && ex_ctrl.fma && !ex_ctrl.singleOut
-        dfma.io.in.bits := fuInput
+        dfma.io.in.bits := pfuInput
         Pipe(dfma, dfma.latency, (c: FPUCtrlSigs) => c.fma && !c.singleOut, dfma.io.out.bits)
       })
 
