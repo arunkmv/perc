@@ -356,7 +356,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
     val wb_ctrl = RegEnable(mem_ctrl, mem_reg_valid)
 
     // regfile
-    val regfile = Mem(32, Bits(width = fLen + 1))
+    val regfile = Mem(32, Bits(width = fLen))
     when(load_wb) {
       val wdata = sanitize(load_wb_data, load_wb_double)
       regfile(load_wb_tag) := wdata
