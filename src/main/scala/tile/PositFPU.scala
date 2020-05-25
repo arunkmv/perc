@@ -5,6 +5,7 @@ import Chisel._
 import chipsalliance.rocketchip.config.Parameters
 import chisel3.experimental.chiselName
 import chisel3.internal.sourceinfo.SourceInfo
+import chisel3.util.MixedVec
 import chisel3.withClock
 import freechips.rocketchip.rocket.RocketCoreParams
 import freechips.rocketchip.util.property.cover
@@ -21,24 +22,29 @@ class PFPUIO(implicit p: Parameters) extends FPUCoreIO ()(p) {
   val cp_resp = Decoupled(new PAResult())
 }
 
-class PAResult(implicit p: Parameters) extends CoreBundle()(p) {
+class PAResult(implicit p: Parameters) extends CoreBundle()(p) with HasPositFPUParameters {
   val data = Bits(width = fLen)
   val exc = Bits(width = FPConstants.FLAGS_SZ)
+  val useGen = Bool()
+  val genTag = Bool()
+  val dataUp = MixedVec(positTypes.map(t => new hardposit.unpackedPosit(t.totalBits, t.es)))
 }
 
-class IntToPAInput(implicit p: Parameters) extends CoreBundle()(p) with HasFPUCtrlSigs {
+class IntToPAInput(implicit p: Parameters) extends CoreBundle()(p) with HasFPUCtrlSigs with HasPositFPUParameters {
   val rm = Bits(width = FPConstants.RM_SZ)
   val typ = Bits(width = 2)
   val in1 = Bits(width = xLen)
+  val in1Extr = MixedVec(positTypes.map(t => new hardposit.unpackedPosit(t.totalBits, t.es)))
 }
 
-class PAInput(implicit p: Parameters) extends CoreBundle()(p) with HasFPUCtrlSigs {
+class PAInput(implicit p: Parameters) extends CoreBundle()(p) with HasFPUCtrlSigs with HasPositFPUParameters {
   val rm = Bits(width = FPConstants.RM_SZ)
   val fmaCmd = Bits(width = 2)
   val typ = Bits(width = 2)
   val in1 = Bits(width = fLen)
   val in2 = Bits(width = fLen)
   val in3 = Bits(width = fLen)
+  val inExtr = MixedVec(positTypes.map(t => Vec(3, new hardposit.unpackedPosit(t.totalBits, t.es))))
 
   override def cloneType = new PAInput().asInstanceOf[this.type]
 }
@@ -156,8 +162,8 @@ class PAToInt(implicit p: Parameters) extends PositFPUModule()(p) with ShouldBeR
         for (p <- positTypes) {
           val w = minXLen << i
           when(intType === i.U && inTag === typeTag(p).U) {
-            val conv = Module(new hardposit.PtoIConverter(p.ps, p.es, w))
-            conv.io.posit := in.in1
+            val conv = Module(new hardposit.PtoIConverterCore(p.ps, p.es, w))
+            conv.io.posit := in.inExtr(typeTag(p))(0)
             conv.io.unsignedOut := in.typ(0)
             toint := conv.io.integer
           }
@@ -183,6 +189,7 @@ class IntToPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()
   val mux = Wire(new PAResult)
   mux.exc := Bits(0)
   mux.data := in.bits.in1
+  mux.useGen := false.B
 
   val intValue = {
     val res = Wire(init = in.bits.in1.asSInt)
@@ -196,14 +203,15 @@ class IntToPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()
   }
 
   when(in.bits.wflags) { // fcvt
-    val i2pResults = for (t <- positTypes) yield {
-      val conv = Module(new hardposit.ItoPConverter(t.totalBits, t.es, xLen))
-      conv.io.integer := intValue
-      conv.io.unsignedIn := in.bits.typ(0)
-      conv.io.posit
+    for (t <- positTypes) {
+      when(typeTag(t) === tag) {
+        val conv = Module(new hardposit.ItoPConverterCore(t.totalBits, t.es, xLen))
+        conv.io.integer := intValue
+        conv.io.unsignedIn := in.bits.typ(0)
+        mux.dataUp(typeTag(t)) := conv.io.posit
+      }
     }
-
-    mux.data := i2pResults(tag)
+    mux.useGen := true.B
   }
 
   io.out <> Pipe(in.valid, mux, latency - 1)
@@ -229,6 +237,7 @@ class PAtoPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(
   val fsgnjMux = Wire(new PAResult)
   fsgnjMux.exc := UInt(0)
   fsgnjMux.data := fsgnj
+  fsgnjMux.useGen := false.B
 
   when(in.bits.wflags) { // fmin/fmax
     fsgnjMux.data := Mux(in.bits.rm(0) =/= io.lt, in.bits.in1, in.bits.in2)
@@ -245,9 +254,10 @@ class PAtoPA(val latency: Int)(implicit p: Parameters) extends PositFPUModule()(
         for (inType <- positTypes) {
           if (typeTag(outType) != typeTag(inType)) {
             when(outTag === typeTag(outType).U && inTag === typeTag(inType).U) {
-              val conv = Module(new hardposit.PtoPConverter(inType.totalBits, inType.es, outType.totalBits, outType.es))
-              conv.io.in := in.bits.in1
-              mux.data := conv.io.out
+              val conv = Module(new hardposit.PtoPConverterCore(inType.totalBits, inType.es, outType.totalBits, outType.es))
+              conv.io.in := in.bits.inExtr(typeTag(inType))(0)
+              mux.dataUp(typeTag(outType)) := conv.io.out
+              mux.useGen := true.B
             }
           }
         }
@@ -283,15 +293,16 @@ class PFPUFMAPipe(val latency: Int, val t: PType)
 
   val fmaValid = RegNext(io.in.valid)
 
-  val fma = Module(new hardposit.PositFMA(t.totalBits, t.es))
-  fma.io.num1 := in.in1
-  fma.io.num2 := in.in2
-  fma.io.num3 := in.in3
+  val fma = Module(new hardposit.PositFMACore(t.totalBits, t.es))
+  fma.io.num1 := in.inExtr(typeTag(t))(0)
+  fma.io.num2 := in.inExtr(typeTag(t))(1)
+  fma.io.num3 := in.inExtr(typeTag(t))(2)
   fma.io.negate := in.fmaCmd(1)
   fma.io.sub := in.fmaCmd.xorR
 
   val res = Wire(new PAResult)
-  res.data := fma.io.out
+  res.dataUp := fma.io.out
+  res.useGen := true.B
   res.exc := 0.U
 
   io.out := Pipe(fmaValid, res, (latency - 1) max 0)
@@ -400,6 +411,13 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
       req.in1 := sanitize(ex_rs(0), tag)
       req.in2 := sanitize(ex_rs(1), tag)
       req.in3 := sanitize(ex_rs(2), tag)
+      for(t <- positTypes) {
+        for (i <- 0 until 3) {
+          val inExtractor = Module(new hardposit.PositExtractor(t.totalBits, t.es))
+          inExtractor.io.in := ex_rs(i)
+          req.inExtr(typeTag(t))(i) := inExtractor.io.out
+        }
+      }
       req.typ := ex_reg_inst(21, 20)
       req.fmaCmd := ex_reg_inst(3, 2) | (!ex_ctrl.ren3 && ex_reg_inst(27))
       when(ex_cp_valid) {
@@ -418,7 +436,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
 
     val paiu = Module(new PAToInt)
     paiu.io.in.valid := req_valid && (ex_ctrl.toint || ex_ctrl.div || ex_ctrl.sqrt || (ex_ctrl.fastpipe && ex_ctrl.wflags))
-    paiu.io.in.bits := pfuInput
+    paiu.io.in.bits := sfma.io.in.bits
     io.store_data := paiu.io.out.bits.store
     io.toint_data := paiu.io.out.bits.toint
     when(paiu.io.out.valid && mem_cp_valid && mem_ctrl.toint) {
@@ -430,6 +448,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
     ipau.io.in.valid := req_valid && ex_ctrl.fromint
     ipau.io.in.bits := paiu.io.in.bits
     ipau.io.in.bits.in1 := Mux(ex_cp_valid, io.cp_req.bits.in1, io.fromint_data)
+    positTypes.map(t => ipau.io.in.bits.in1Extr(typeTag(t)) := paiu.io.in.bits.inExtr(typeTag(t))(0))
 
     val pamu = Module(new PAtoPA(2))
     pamu.io.in.valid := req_valid && ex_ctrl.fastpipe
@@ -440,7 +459,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
     val divSqrt_inFlight = Wire(init = false.B)
     val divSqrt_waddr = Reg(UInt(width = 5))
     val divSqrt_typeTag = Wire(UInt(width = log2Up(positTypes.size)))
-    val divSqrt_wdata = Wire(UInt(width = fLen)) // TODO add PLen
+    val divSqrt_wdata = Wire(MixedVec(positTypes.map(t => new hardposit.unpackedPosit(t.totalBits, t.es)))) // TODO add PLen
     val divSqrt_flags = Wire(UInt(width = FPConstants.FLAGS_SZ))
 
     // writeback arbitration
@@ -504,7 +523,19 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
 
     val waddr = Mux(divSqrt_wen, divSqrt_waddr, wbInfo(0).rd)
     val wdouble = Mux(divSqrt_wen, divSqrt_typeTag, !wbInfo(0).single)
-    val wdata = Mux(divSqrt_wen, divSqrt_wdata, (pipes.map(_.res.data): Seq[UInt]) (wbInfo(0).pipeid))
+
+    val wdata = Wire(UInt(width = fLen))
+    for(t <- positTypes) {
+      val outGenerator = Module(new hardposit.PositGenerator(t.totalBits, t.es))
+      val pipeResult = (pipes.map(_.res): Seq[PAResult]) (wbInfo(0).pipeid)
+      val useGenResult = divSqrt_wen | pipeResult.useGen
+      outGenerator.io.in := Mux(divSqrt_wen, divSqrt_wdata(typeTag(t)), pipeResult.dataUp(typeTag(t)))
+
+      when(typeTag(t) === wdouble) {
+        wdata := Mux(useGenResult, outGenerator.io.out, pipeResult.data)
+      }
+    }
+
     val wexc = (pipes.map(_.res.exc): Seq[UInt]) (wbInfo(0).pipeid)
     when((!wbInfo(0).cp && wen(0)) || divSqrt_wen) {
       regfile(waddr) := wdata
@@ -548,11 +579,11 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
 
       for (t <- positTypes) {
         val tag = !mem_ctrl.singleOut // TODO typeTag
-        val divSqrt = Module(new hardposit.PositDivSqrt(t.totalBits, t.es))
+        val divSqrt = Module(new hardposit.PositDivSqrtCore(t.totalBits, t.es))
         divSqrt.io.validIn := mem_reg_valid && tag === typeTag(t) && (mem_ctrl.div || mem_ctrl.sqrt) && !divSqrt_inFlight
         divSqrt.io.sqrtOp := mem_ctrl.sqrt
-        divSqrt.io.num1 := paiu.io.out.bits.in.in1
-        divSqrt.io.num2 := paiu.io.out.bits.in.in2
+        divSqrt.io.num1 := paiu.io.out.bits.in.inExtr(typeTag(t))(0)
+        divSqrt.io.num2 := paiu.io.out.bits.in.inExtr(typeTag(t))(1)
 
         when(!divSqrt.io.readyIn) {
           divSqrt_inFlight := true
@@ -565,7 +596,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
 
         when(divSqrt.io.validOut_div || divSqrt.io.validOut_sqrt) {
           divSqrt_wen := !divSqrt_killed
-          divSqrt_wdata := divSqrt.io.out
+          divSqrt_wdata(typeTag(t)) := divSqrt.io.out
           divSqrt_flags := divSqrt.io.exceptions
           divSqrt_typeTag := typeTag(t)
         }
