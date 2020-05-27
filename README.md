@@ -1,3 +1,38 @@
+Posit Enhanced Rocket Chip
+=====================
+
+This is a fork of the Rocket Chip Soc Generator that provides support for [posit arithmetic](https://posithub.org/docs/Posits4.pdf). This has been enabled by utilizing the F and D standard RISC V ISA extensions for floating point arithmetic. The instructions are implemented by the Posit Processing Unit (PPU)/PositFPU which replaces the inhouse IEEE 754 2008 FPU.
+For more information on Posit Arithmetic:
+
+[Posit Hub](https://posithub.org/) \
+[Unum-computing Google group](https://groups.google.com/forum/#!forum/unum-computing)
+
+### To instantiate Rocket Chip with the posit configuration:
+Follow all steps as mentioned in the Rocket Chip README to set-up your environment.
+
+First, to build the C simulator:
+
+    $ cd emulator
+    $ make CONFIG=PositEnabledConfig
+
+To build a C simulator that is capable of VCD waveform generation:
+
+    $ cd emulator
+    $ make debug CONFIG=PositEnabledConfig
+
+To generate FPGA- or VLSI-synthesizable Verilog (output will be in `vsim/generated-src`):
+
+    $ cd vsim
+    $ make verilog CONFIG=PositEnabledConfig
+
+#### Posit Arithmetic RISC V ISA tests
+
+We have also implemented RISC V ISA assembly tests for posit arithmetic using the F and D extensions to test this design using the C simulator which can be found [here](https://github.com/arunkmv/riscv-tests)
+
+We are also working towards updating this fork to the latest release of Rocket Chip and optimizing the PPU.
+
+Rest of this README is from the original Rocket Chip repository.
+
 Rocket Chip Generator :rocket: [![Build Status](https://travis-ci.org/chipsalliance/rocket-chip.svg?branch=master)](https://travis-ci.org/chipsalliance/rocket-chip)
 =====================
 
