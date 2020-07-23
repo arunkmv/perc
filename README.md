@@ -2,7 +2,7 @@ Posit Enhanced Rocket Chip
 =====================
 
 This is a fork of the Rocket Chip Soc Generator that provides support for [posit arithmetic](https://posithub.org/docs/Posits4.pdf). This has been enabled by utilizing the F and D standard RISC V ISA extensions for floating point arithmetic. The instructions are implemented by the Posit Processing Unit (PPU)/PositFPU which replaces the inhouse IEEE 754 2008 FPU.
-For more information on Posit Arithmetic:
+For more information on posit arithmetic:
 
 [Posit Hub](https://posithub.org/) \
 [Unum-computing Google group](https://groups.google.com/forum/#!forum/unum-computing)

@@ -23,7 +23,6 @@ trait CoreParams {
   val useRVE: Boolean
   val mulDiv: Option[MulDivParams]
   val fpu: Option[FPUParams]
-  val pfpu: Option[PFPUParams]
   val fetchWidth: Int
   val decodeWidth: Int
   val retireWidth: Int
@@ -53,16 +52,15 @@ trait CoreParams {
   def eLen(xLen: Int, fLen: Int): Int = xLen max fLen
   def vMemDataBits: Int = 0
 
-  require(!(pfpu.isEmpty && fpu.isEmpty))
 }
 
 trait HasCoreParameters extends HasTileParameters {
   val coreParams: CoreParams = tileParams.core
 
-  val fLen = coreParams.fpu.map(_.fLen).getOrElse(0) | coreParams.pfpu.map(_.pLen).getOrElse(0)
+  val fLen = coreParams.fpu.map(_.fLen).getOrElse(0)
 
   val usingMulDiv = coreParams.mulDiv.nonEmpty
-  val usingFPU = coreParams.fpu.nonEmpty || coreParams.pfpu.nonEmpty
+  val usingFPU = coreParams.fpu.nonEmpty
   val usingAtomics = coreParams.useAtomics
   val usingAtomicsOnlyForIO = coreParams.useAtomicsOnlyForIO
   val usingAtomicsInCache = usingAtomics && !usingAtomicsOnlyForIO

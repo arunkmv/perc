@@ -11,11 +11,9 @@ import freechips.rocketchip.rocket.RocketCoreParams
 import freechips.rocketchip.util.property.cover
 import freechips.rocketchip.util.{ClockGate, ShouldBeRetimed, _}
 
-case class PFPUParams(
-                       pLen: Int = 64,
-                       divSqrt: Boolean = true,
-                       fmaLatency: Int = 2
-                     )
+sealed trait FPUType
+case object IEEE754 extends FPUType
+case object POSIT   extends FPUType
 
 class unPackedToGenerator(val totalBits: Int, val es: Int) extends Bundle with hardposit.HasHardPositParams {
   val unpackedPosit = new hardposit.unpackedPosit(totalBits, es)
@@ -62,16 +60,15 @@ class PAInput(implicit p: Parameters) extends CoreBundle()(p) with HasFPUCtrlSig
 }
 
 
-case class PType(es: Int, ps: Int) {
+case class PType(es: Int, ps: Int) extends hardposit.HasHardPositParams {
   val totalBits = ps
-  val NaR = math.pow(2, totalBits - 1).toInt.U(totalBits.W)
 
   def classify(x: UInt): UInt = {
     val sign = x(totalBits - 1)
-    val isZero = x === 0.U
-    val isNaR = sign && !x(totalBits - 2, 0).orR()
+    val is_zero = isZero(x)
+    val is_NaR = isNaR(x)
 
-    Cat(isZero, isNaR, Mux(isNaR, 0.U, sign))
+    Cat(is_zero, is_NaR, Mux(is_NaR, 0.U, sign))
   }
 }
 
@@ -317,7 +314,7 @@ class PFPUFMAPipe(val latency: Int, val t: PType)
 }
 
 @chiselName
-class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()(p) {
+class PositFPU(cfg: FPUParams)(implicit p: Parameters) extends PositFPUModule()(p) {
   val io = new PFPUIO
 
   //Gated Clock
@@ -451,7 +448,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
 
     val paInput = pfuInput
 
-    val sfma = Module(new PFPUFMAPipe(cfg.fmaLatency, PType.S))
+    val sfma = Module(new PFPUFMAPipe(cfg.sfmaLatency, PType.S))
     sfma.io.in.valid := isFma && ex_ctrl.singleOut
     sfma.io.in.bits.rm := paInput.rm
     sfma.io.in.bits.fmaCmd := paInput.fmaCmd
@@ -493,7 +490,7 @@ class PositFPU(cfg: PFPUParams)(implicit p: Parameters) extends PositFPUModule()
       Pipe(ipau, ipau.latency, (c: FPUCtrlSigs) => c.fromint, ipau.io.out.bits),
       Pipe(sfma, sfma.latency, (c: FPUCtrlSigs) => c.fma && c.singleOut, sfma.io.out.bits)) ++
       (fLen > 32).option({
-        val dfma = Module(new PFPUFMAPipe(cfg.fmaLatency, PType.D))
+        val dfma = Module(new PFPUFMAPipe(cfg.dfmaLatency, PType.D))
         dfma.io.in.valid := req_valid && ex_ctrl.fma && !ex_ctrl.singleOut
         dfma.io.in.bits.rm := paInput.rm
         dfma.io.in.bits.fmaCmd := paInput.fmaCmd

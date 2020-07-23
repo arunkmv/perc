@@ -96,7 +96,7 @@ trait HasLazyRoCCModule extends CanHavePTWModule
       respArb.io.in(i) <> Queue(rocc.module.io.resp)
     }
 
-    fpuOpt foreach { fpu =>
+    fpuOpt foreach { case fpu: FPU =>
       val nFPUPorts = outer.roccs.filter(_.usesFPU).size
       if (usingFPU && nFPUPorts > 0) {
         val fpArb = Module(new InOrderArbiter(new FPInput()(outer.p), new FPResult()(outer.p), nFPUPorts))

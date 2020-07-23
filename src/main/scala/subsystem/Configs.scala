@@ -71,7 +71,7 @@ class WithNPositEnabledCores(n: Int) extends Config((site, here, up) => {
         mulUnroll = 8,
         mulEarlyOut = true,
         divEarlyOut = true)),
-        fpu = None, pfpu = Some(PFPUParams())),
+        fpu = Some(FPUParams(fpuType = POSIT))),
       dcache = Some(DCacheParams(
         rowBits = site(SystemBusKey).beatBits,
         nMSHRs = 0,

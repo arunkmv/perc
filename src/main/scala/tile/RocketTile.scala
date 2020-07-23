@@ -118,7 +118,6 @@ class RocketTile private(
 
 class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
     with HasFpuOpt
-    with HasPositFpuOpt
     with HasLazyRoCCModule
     with HasICacheFrontendModule {
   Annotated.params(this, outer.rocketParams)
@@ -157,7 +156,6 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
   outer.frontend.module.io.cpu <> core.io.imem
   dcachePorts += core.io.dmem // TODO outer.dcachePorts += () => module.core.io.dmem ??
   fpuOpt foreach { fpu => core.io.fpu <> fpu.io }
-  pfpuOpt foreach { pfpu => core.io.fpu <> pfpu.io}
   core.io.ptw <> ptw.io.dpath
 
   // Connect the coprocessor interfaces
@@ -184,9 +182,9 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
 }
 
 trait HasFpuOpt { this: RocketTileModuleImp =>
-  val fpuOpt = outer.tileParams.core.fpu.map(params => Module(new FPU(params)(outer.p)))
-}
-
-trait HasPositFpuOpt { this: RocketTileModuleImp =>
-  val pfpuOpt = outer.tileParams.core.pfpu.map(params => Module(new PositFPU(params)(outer.p)))
+  val fpuOpt = outer.tileParams.core.fpu.map(params =>
+    params.fpuType match {
+      case IEEE754 => Module(new FPU(params)(outer.p))
+      case POSIT   => Module(new PositFPU(params)(outer.p))
+    })
 }
