@@ -42,7 +42,7 @@ case class RocketCoreParams(
   mvendorid: Int = 0, // 0 means non-commercial implementation
   mimpid: Int = 0x20181004, // release date in BCD
   mulDiv: Option[MulDivParams] = Some(MulDivParams()),
-  fpu: Option[FPUParams] = Some(FPUParams())
+  fpu: Option[FPUParams] = Some(FPUParams()),
 ) extends CoreParams {
   val lgPauseCycles = 5
   val haveFSDirty = false

@@ -18,7 +18,8 @@ case class FPUParams(
   fLen: Int = 64,
   divSqrt: Boolean = true,
   sfmaLatency: Int = 3,
-  dfmaLatency: Int = 4
+  dfmaLatency: Int = 4,
+  fpuType: FPUType = IEEE754
 )
 
 object FPConstants

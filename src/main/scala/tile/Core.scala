@@ -3,7 +3,6 @@
 package freechips.rocketchip.tile
 
 import Chisel._
-
 import freechips.rocketchip.config._
 import freechips.rocketchip.rocket._
 import freechips.rocketchip.util._
@@ -52,6 +51,7 @@ trait CoreParams {
   def vLen: Int = 0
   def eLen(xLen: Int, fLen: Int): Int = xLen max fLen
   def vMemDataBits: Int = 0
+
 }
 
 trait HasCoreParameters extends HasTileParameters {
