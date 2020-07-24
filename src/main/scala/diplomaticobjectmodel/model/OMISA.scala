@@ -4,7 +4,7 @@ package freechips.rocketchip.diplomaticobjectmodel.model
 
 
 import freechips.rocketchip.rocket.RocketCoreParams
-import freechips.rocketchip.tile.CoreParams
+import freechips.rocketchip.tile.{CoreParams, RocketTile}
 import freechips.rocketchip.util.BooleanToAugmentedBoolean
 
 trait OMExtensionType extends OMEnum
@@ -24,6 +24,7 @@ case object Sv48 extends OMAddressTranslationMode
 trait OMBaseInstructionSet extends OMEnum
 case object RV32E extends OMBaseInstructionSet
 case object RV32I extends OMBaseInstructionSet
+case object RV64E extends OMBaseInstructionSet
 case object RV64I extends OMBaseInstructionSet
 case object RV128I extends OMBaseInstructionSet
 
@@ -36,6 +37,7 @@ case class OMISA(
   f: Option[OMSpecification],
   d: Option[OMSpecification],
   c: Option[OMSpecification],
+  v: Option[OMVectorExtension] = None,
   u: Option[OMSpecification],
   s: Option[OMSpecification],
   addressTranslationModes: Seq[OMAddressTranslationMode],
@@ -43,16 +45,27 @@ case class OMISA(
   _types: Seq[String] = Seq("OMISA", "OMCompoundType")
 ) extends OMCompoundType
 
-object OMISA {
-  def customExtensions(coreParams: RocketCoreParams): List[OMCustomExtensionSpecification] = {
-    if (coreParams.haveCFlush) List (Xsifivecflushdlone()) else Nil
-  }
+case class OMVectorExtension(
+  version: String,
+  vLen: Int,
+  sLen: Int,
+  eLen: Int,
+  name: String = "V Standard Extension for Vector Operations",
+  _types: Seq[String] = Seq("OMVectorExtension")
+)
 
-  def rocketISA(coreParams: RocketCoreParams, xLen: Int): OMISA = {
+object OMISA {
+  def rocketISA(tile: RocketTile, xLen: Int): OMISA = {
+    val coreParams = tile.rocketParams.core
+
     val baseInstructionSet = xLen match {
-      case 32 => RV32I
-      case 64 => RV64I
+      case 32 => if (coreParams.useRVE) RV32E else RV32I
+      case 64 => if (coreParams.useRVE) RV64E else RV64I
       case _ => throw new IllegalArgumentException(s"ERROR: Invalid Xlen: $xLen")
+    }
+
+    val customExtensions = {
+      if (coreParams.haveCFlush) List (Xsifivecflushdlone(full = true, line = tile.dcache.canSupportCFlushLine)) else Nil
     }
 
     val isaExtSpec = ISAExtensions.specVersion _
@@ -62,6 +75,7 @@ object OMISA {
     val baseISAVersion = baseInstructionSet match {
       case RV32E => "1.9"
       case RV32I => "2.0"
+      case RV64E => "1.9"
       case RV64I => "2.0"
       case _ => throw new IllegalArgumentException(s"ERROR: Invalid baseISAVersion: $baseInstructionSet")
     }
@@ -84,7 +98,7 @@ object OMISA {
       u = (coreParams.useVM || coreParams.useUser).option(isaExtSpec(U, "1.10")),
       s = coreParams.useVM.option(isaExtSpec(S, "1.10")),
       addressTranslationModes = Seq(addressTranslationModes),
-      customExtensions = customExtensions(coreParams)
+      customExtensions = customExtensions
     )
   }
 }

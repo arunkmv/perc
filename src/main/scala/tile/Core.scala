@@ -49,6 +49,7 @@ trait CoreParams {
   def dcacheReqTagBits: Int = 6
 
   def vLen: Int = 0
+  def sLen: Int = 0
   def eLen(xLen: Int, fLen: Int): Int = xLen max fLen
   def vMemDataBits: Int = 0
 
@@ -87,6 +88,7 @@ trait HasCoreParameters extends HasTileParameters {
   val mtvecWritable = coreParams.mtvecWritable
 
   def vLen = coreParams.vLen
+  def sLen = coreParams.sLen
   def eLen = coreParams.eLen(xLen, fLen)
   def vMemDataBits = if (usingVector) coreParams.vMemDataBits else 0
   def maxVLMax = vLen
@@ -125,6 +127,7 @@ trait HasCoreIO extends HasTileParameters {
     val trace = Vec(coreParams.retireWidth, new TracedInstruction).asOutput
     val bpwatch = Vec(coreParams.nBreakpoints, new BPWatch(coreParams.retireWidth)).asOutput
     val cease = Bool().asOutput
+    val wfi = Bool().asOutput
     val traceStall = Bool().asInput
   }
 }

@@ -201,7 +201,7 @@ clock-crossers and converters from TileLink to external bus protocols (e.g. AXI 
 This RTL package contains implementations for peripheral devices, including the Debug module and various TL slaves.
 * **diplomacy**
 This utility package extends Chisel by allowing for two-phase hardware elaboration, in which certain parameters
-are dynamically negotiated between modules. For more information about diplomacy, see [this paper](https://carrv.github.io/papers/cook-diplomacy-carrv2017.pdf).
+are dynamically negotiated between modules. For more information about diplomacy, see [this paper](https://carrv.github.io/2017/papers/cook-diplomacy-carrv2017.pdf).
 * **groundtest**
 This RTL package generates synthesizable hardware testers that emit randomized
 memory access streams in order to stress-tests the uncore memory hierarchy.
@@ -474,7 +474,7 @@ Then you can build as usual with CONFIG=MyConfig.
 
 The objective of this section is to use GNU debugger to debug RISC-V programs running on the emulator in the same fashion as in [Spike](https://github.com/riscv/riscv-isa-sim#debugging-with-gdb).
 
-For that we need to add a Remote Bit-Bang client to the emulator. We can do so by extending our Config with JtagDTMSystem, which will add a DebugTransportModuleJTAG to the DUT and connect a SimJTAG module in the Test Harness. This will allow OpenOCD to interface with the emulator, and GDB can interface with OpenOCD. In the following example we added this Config extension to the DefaultConfig:
+For that we need to add a Remote Bit-Bang client to the emulator. We can do so by extending our Config with JtagDTMSystem, which will add a DebugTransportModuleJTAG to the DUT and connect a SimJTAG module in the Test Harness. This will allow OpenOCD to interface with the emulator, and GDB can interface with OpenOCD. In the following example we added this Config extension to the Config.scala:
 
     class DefaultConfigRBB extends Config(
     new WithJtagDTMSystem ++ new WithNBigCores(1) ++ new BaseConfig)

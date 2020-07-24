@@ -159,8 +159,9 @@ class FrontendModule(outer: Frontend) extends LazyModuleImp(outer)
   icache.io.s1_paddr := tlb.io.resp.paddr
   icache.io.s2_vaddr := s2_pc
   icache.io.s1_kill := s2_redirect || tlb.io.resp.miss || s2_replay
-  icache.io.s2_kill := s2_speculative && !s2_tlb_resp.cacheable || s2_xcpt
-  icache.io.s2_prefetch := s2_tlb_resp.prefetchable
+  val s2_can_speculatively_refill = s2_tlb_resp.cacheable && !io.ptw.customCSRs.asInstanceOf[RocketCustomCSRs].disableSpeculativeICacheRefill
+  icache.io.s2_kill := s2_speculative && !s2_can_speculatively_refill || s2_xcpt
+  icache.io.s2_prefetch := s2_tlb_resp.prefetchable && !io.ptw.customCSRs.asInstanceOf[RocketCustomCSRs].disableICachePrefetch
 
   fq.io.enq.valid := RegNext(s1_valid) && s2_valid && (icache.io.resp.valid || !s2_tlb_resp.miss && icache.io.s2_kill)
   fq.io.enq.bits.pc := s2_pc
@@ -172,6 +173,7 @@ class FrontendModule(outer: Frontend) extends LazyModuleImp(outer)
   fq.io.enq.bits.btb := s2_btb_resp_bits
   fq.io.enq.bits.btb.taken := s2_btb_taken
   fq.io.enq.bits.xcpt := s2_tlb_resp
+  assert(!(s2_speculative && io.ptw.customCSRs.asInstanceOf[RocketCustomCSRs].disableSpeculativeICacheRefill && !icache.io.s2_kill))
   when (icache.io.resp.valid && icache.io.resp.bits.ae) { fq.io.enq.bits.xcpt.ae.inst := true }
 
   if (usingBTB) {

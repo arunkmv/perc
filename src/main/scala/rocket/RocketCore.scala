@@ -72,14 +72,21 @@ class RocketCustomCSRs(implicit p: Parameters) extends CustomCSRs with HasRocket
     rocketParams.branchPredictionModeCSR.option(CustomCSR(bpmCSRId, BigInt(1), Some(BigInt(0))))
   }
 
+  private def haveDCache = tileParams.dcache.get.scratch.isEmpty
+
   override def chickenCSR = {
     val mask = BigInt(
       tileParams.dcache.get.clockGate.toInt << 0 |
       rocketParams.clockGate.toInt << 1 |
-      rocketParams.clockGate.toInt << 2
+      rocketParams.clockGate.toInt << 2 |
+      1 << 3 | // disableSpeculativeICacheRefill
+      haveDCache.toInt << 9 | // suppressCorruptOnGrantData
+      tileParams.icache.get.prefetch.toInt << 17
     )
     Some(CustomCSR(chickenCSRId, mask, Some(mask)))
   }
+
+  def disableICachePrefetch = getOrElse(chickenCSR, _.value(17), true.B)
 
   def marchid = CustomCSR.constant(CSRs.marchid, BigInt(1))
 
@@ -111,7 +118,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   def pipelineIDToWB[T <: Data](x: T): T =
     RegEnable(RegEnable(RegEnable(x, !ctrl_killd), ex_pc_valid), mem_pc_valid)
   val perfEvents = new EventSets(Seq(
-    new EventSet((mask, hits) => Mux(mask(0), wb_xcpt, wb_valid && pipelineIDToWB((mask & hits).orR)), Seq(
+    new EventSet((mask, hits) => Mux(wb_xcpt, mask(0), wb_valid && pipelineIDToWB((mask & hits).orR)), Seq(
       ("exception", () => false.B),
       ("load", () => id_ctrl.mem && id_ctrl.mem_cmd === M_XRD && !id_ctrl.fp),
       ("store", () => id_ctrl.mem && id_ctrl.mem_cmd === M_XWR && !id_ctrl.fp),
@@ -436,6 +443,11 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     when (id_ctrl.mem_cmd.isOneOf(M_SFENCE, M_FLUSH_ALL)) {
       ex_reg_mem_size := Cat(id_raddr2 =/= UInt(0), id_raddr1 =/= UInt(0))
     }
+    if (tile.dcache.flushOnFenceI) {
+      when (id_ctrl.fence_i) {
+        ex_reg_mem_size := 0
+      }
+    }
 
     for (i <- 0 until id_raddr.size) {
       val do_bypass = id_bypass_src(i).reduce(_||_)
@@ -583,7 +595,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     wb_reg_raw_inst := mem_reg_raw_inst
     wb_reg_mem_size := mem_reg_mem_size
     wb_reg_pc := mem_reg_pc
-    wb_reg_wphit := mem_reg_wphit | bpu.io.bpwatch.map { bpw => bpw.dvalid(0) }
+    wb_reg_wphit := mem_reg_wphit | bpu.io.bpwatch.map { bpw => (bpw.rvalid(0) && mem_reg_load) || (bpw.wvalid(0) && mem_reg_store) }
 
   }
 
@@ -821,7 +833,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   io.dmem.s1_kill := killm_common || mem_ldst_xcpt || fpu_kill_mem
   io.dmem.s2_kill := false
   // don't let D$ go to sleep if we're probably going to use it soon
-  io.dmem.keep_clock_enabled := ibuf.io.inst(0).valid && id_ctrl.mem
+  io.dmem.keep_clock_enabled := ibuf.io.inst(0).valid && id_ctrl.mem && !csr.io.csr_stall
 
   io.rocc.cmd.valid := wb_reg_valid && wb_ctrl.rocc && !replay_wb_common
   io.rocc.exception := wb_xcpt && csr.io.status.xs.orR
@@ -834,6 +846,7 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   val unpause = csr.io.time(rocketParams.lgPauseCycles-1, 0) === 0 || io.dmem.perf.release || take_pc
   when (unpause) { id_reg_pause := false }
   io.cease := csr.io.status.cease && !clock_en_reg
+  io.wfi := csr.io.status.wfi
   if (rocketParams.clockGate) {
     long_latency_stall := csr.io.csr_stall || io.dmem.perf.blocked || id_reg_pause && !unpause
     clock_en := clock_en_reg || ex_pc_valid || (!long_latency_stall && io.imem.resp.valid)

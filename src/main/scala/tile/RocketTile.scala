@@ -126,7 +126,7 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
   val core = Module(new Rocket(outer)(outer.p))
 
   // Report unrecoverable error conditions; for now the only cause is cache ECC errors
-  outer.reportHalt(List(outer.frontend.module.io.errors, outer.dcache.module.io.errors))
+  outer.reportHalt(List(outer.dcache.module.io.errors))
 
   // Report when the tile has ceased to retire instructions; for now the only cause is clock gating
   outer.reportCease(outer.rocketParams.core.clockGate.option(
@@ -135,7 +135,7 @@ class RocketTileModuleImp(outer: RocketTile) extends BaseTileModuleImp(outer)
     !ptw.io.dpath.clock_enabled &&
     core.io.cease))
 
-  outer.reportWFI(None) // TODO: actually report this?
+  outer.reportWFI(Some(core.io.wfi))
 
   outer.decodeCoreInterrupts(core.io.interrupts) // Decode the interrupt vector
 
