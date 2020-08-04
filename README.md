@@ -7,6 +7,8 @@ For more information on posit arithmetic:
 [Posit Hub](https://posithub.org/) \
 [Unum-computing Google group](https://groups.google.com/forum/#!forum/unum-computing)
 
+For more detailed information, please refer to our [paper](https://carrv.github.io/2020/papers/CARRV2020_paper_5_MV.pdf).
+
 ### To instantiate Rocket Chip with the posit configuration:
 Follow all steps as mentioned in the Rocket Chip README to set-up your environment.
 
